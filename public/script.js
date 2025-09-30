@@ -2219,10 +2219,6 @@ export function scrollChatToBottom() {
     }
 }
 
-export function scrollChatToMessage(messageId) {
-    chatElement.find(`[mesid="${messageId}"]`).scrollTop();
-}
-
 /**
  * Substitutes {{macro}} parameters in a string.
  * @param {string} content - The string to substitute parameters in.
