@@ -359,6 +359,7 @@ export let name1 = default_user_name;
 export let name2 = systemUserName;
 export let chat = [];
 export let chatTree = {};
+export function setChatTree(newChat) { chatTree = newChat; }
 let chatSaveTimeout;
 let importFlashTimeout;
 export let isChatSaving = false;
@@ -805,6 +806,7 @@ export async function selectCharacterById(id, { switchMenu = true } = {}) {
             selected_button = 'character_edit';
             setCharacterId(id);
             chat.length = 0;
+            chatTree = {};
             chat_metadata = {};
             await getChat();
         }
@@ -1316,6 +1318,7 @@ export async function deleteCharacterChatByName(characterId, fileName) {
 export async function replaceCurrentChat() {
     await clearChat();
     chat.length = 0;
+    chatTree = {};
 
     const chatsResponse = await fetch('/api/characters/chats', {
         method: 'POST',
@@ -1484,6 +1487,7 @@ export async function reloadCurrentChat() {
     preserveNeutralChat();
     await clearChat();
     chat.length = 0;
+    chatTree = {};
 
     if (selected_group) {
         await getGroupChat(selected_group, true);
@@ -2213,6 +2217,10 @@ export function scrollChatToBottom() {
 
         chatElement.scrollTop(position);
     }
+}
+
+export function scrollChatToMessage(messageId) {
+    chatElement.find(`[mesid="${messageId}"]`).scrollTop();
 }
 
 /**
@@ -6163,11 +6171,11 @@ export async function renameCharacter(name = null, { silent = false, renameChats
             const oldName = getCharaFilename(null, { manualAvatarKey: oldAvatar });
             const newName = getCharaFilename(null, { manualAvatarKey: newAvatar });
 
-            // Replace other auxillery fields where was referenced by avatar key
+            // Replace other auxiliary fields where was referenced by avatar key
             // Tag List
             renameTagKey(oldAvatar, newAvatar);
 
-            // Addtional lore books
+            // Additional lore books
             const charLore = world_info.charLore?.find(x => x.name == oldName);
             if (charLore) {
                 charLore.name = newName;
@@ -6267,7 +6275,7 @@ async function renamePastChats(oldAvatar, newAvatar, newName) {
             });
 
             if (getChatResponse.ok) {
-                const currentChat = await getChatResponse.json();
+                const { chatData:currentChat, chatTreeData:currentChatTree } = await getChatResponse.json();
 
                 for (const message of currentChat) {
                     if (message.is_user || message.is_system || message.extra?.type == system_message_types.NARRATOR) {
@@ -6288,6 +6296,7 @@ async function renamePastChats(oldAvatar, newAvatar, newName) {
                         ch_name: newName,
                         file_name: fileNameWithoutExtension,
                         chat: currentChat,
+                        chatTree: currentChatTree,
                         avatar_url: newAvatar,
                     }),
                     cache: 'no-cache',
@@ -6387,6 +6396,7 @@ export async function saveChat({ chatName, withMetadata, mesId, force = false } 
                 ch_name: characters[this_chid].name,
                 file_name: fileName,
                 chat: chatToSave,
+                chatTree: chatTree,
                 avatar_url: characters[this_chid].avatar,
                 force: force,
             }),
@@ -6597,8 +6607,10 @@ export async function getChat() {
             dataType: 'json',
             contentType: 'application/json',
         });
-        if (response[0] !== undefined) {
-            chat.splice(0, chat.length, ...response);
+        const { chatData, chatTreeData } = response;
+
+        if (chatData[0] !== undefined) {
+            chat.splice(0, chat.length, ...chatData);
             chat_create_date = chat[0]['create_date'];
             chat_metadata = chat[0]['chat_metadata'] ?? {};
 
@@ -6611,6 +6623,9 @@ export async function getChat() {
         }
         await getChatResult();
         eventSource.emit('chatLoaded', { detail: { id: this_chid, character: characters[this_chid] } });
+
+        //load the chatTree.
+        chatTree = chatTreeData ?? {};
 
         // Focus on the textarea if not already focused on a visible text input
         setTimeout(function () {
@@ -6685,6 +6700,7 @@ export async function openCharacterChat(file_name) {
     await clearChat();
     characters[this_chid]['chat'] = file_name;
     chat.length = 0;
+    chatTree = {};
     chat_metadata = {};
     await getChat();
     $('#selected_chat_pole').val(file_name);
@@ -7331,8 +7347,9 @@ export async function getChatsFromFiles(data, isGroupChat) {
                     return res();
                     // continue;
                 }
+                // eslint-disable-next-line no-unused-vars
+                const { chatData:currentChat, chatTreeData:currentChatTree } = await chatResponse.json();
 
-                const currentChat = await chatResponse.json();
                 if (!isGroupChat) {
                     // remove the first message, which is metadata, only for individual chats
                     currentChat.shift();
@@ -7939,7 +7956,7 @@ export function callPopup(text, type, inputValue = '', { okButton, rows, wide, w
  * @param {Number} mesId
  */
 export function updateSwipeCounter(mesId) {
-    const swipeCounterText = formatSwipeCounter((chat[mesId]?.['swipe_id'] + 1), chat[mesId]?.swipes.length);
+    const swipeCounterText = formatSwipeCounter((chat[mesId]?.['swipe_id'] + 1), chat[mesId]?.['swipes']?.length);
     const currentMessage = chatElement.children().filter(`[mesid="${mesId}"]`);
     const swipeCounter = currentMessage.find('.swipes-counter');
     swipeCounter.text(swipeCounterText).show();
@@ -7985,7 +8002,7 @@ export function showSwipeButtons() {
 
     const currentMessage = chatElement.children().filter(`[mesid="${mesId}"]`);
     const swipeId = chat[mesId].swipe_id;
-    const swipeCounterText = formatSwipeCounter((swipeId + 1), chat[mesId].swipes.length);
+    const swipeCounterText = formatSwipeCounter((swipeId + 1), chat[mesId]?.['swipes']?.length);
     const swipeRight = currentMessage.find('.swipe_right');
     const swipeLeft = currentMessage.find('.swipe_left');
     const swipeCounter = currentMessage.find('.swipes-counter');
@@ -8603,6 +8620,9 @@ export function saveChatToTree(chatTree, chat) {
             branch['branch'] = [];
         }
 
+        // eslint-disable-next-line no-unused-vars
+        const { swipes:_s, swipe_info:_si, swipe_id:_sid, ...swipelessMessage } = { ...structuredClone(chatMessage) };
+
         //There must be at least as many messages as branch_id
         console.assert(branch_id <= (chatMessage['swipes']?.length ?? 0), 'There must be at least as many messages as branch_id');
 
@@ -8612,16 +8632,23 @@ export function saveChatToTree(chatTree, chat) {
             // There must be at least a message for every swipe_info.
             console.assert(chatMessage['swipe_info']?.length <= (chatMessage['swipes']?.length ?? 0), 'There must be at least a message for every swipe_info.');
 
-            //branch = Full Message > Old branch's info > swipe_info > Swipe message.
-            // branch['branch'][i] = {  ...structuredClone(chatMessage), ...branch[i], ...structuredClone(chatMessage?.swipe_info[i]), mes: swipe };
-            branch['branch'][i] = {  ...structuredClone(chatMessage), ...structuredClone(chatMessage?.swipe_info[i]), mes: swipe, 'branch':branch['branch'][i]?.['branch']  };
+            //branch = Full Message < swipe_info < Swipe message.
+            if (!branch['branch'][i]) {branch['branch'][i] = {};}
+            Object.assign(branch['branch'][i], { ...structuredClone(swipelessMessage), ...structuredClone(chatMessage?.swipe_info[i]), mes: swipe } );
         });
 
         //Set the full message while preserving branches.
-        branch['branch'][branch_id] = {  ...structuredClone(chatMessage), 'branch':branch['branch'][branch_id]?.['branch'] };
-
+        if (!branch['branch'][branch_id]) {branch['branch'][branch_id] = {};}
+        Object.assign(branch['branch'][branch_id], {  ...structuredClone(swipelessMessage) });
         //Follow the branch.
         branch = branch['branch'][branch_id];
+    }
+
+    //Prune deleted branch.
+    if (typeof(branch['branch_id']) == 'number') {
+        console.log('Pruning deleted branch.', branch);
+        delete branch['branch_id'];
+        delete branch['branches'];
     }
 }
 
@@ -8630,7 +8657,7 @@ export function saveChatToTree(chatTree, chat) {
  * @param {object} chatTree
  * @param {Array} chat
  * @param {number} index - The starting index in the chat array
- * @returns {Array} - A stick is a stripped branch. The flattened chat array after the index. AAAAAAAAAAAAAA
+ * @returns {Array} - A stick is a stripped branch. The flattened chat array after the index.
  */
 export function getStickFromTree(chatTree, chat, index) {
 
@@ -8667,6 +8694,20 @@ export function getStickFromTree(chatTree, chat, index) {
                 //Push the message without it's branches.
                 // eslint-disable-next-line no-unused-vars
                 let { branch: _, ...message } = structuredClone(branch['branch'][branch_id]);
+
+                //Deccompress swipe.
+                message['swipes'] = branch['branch'].map((m) => m.mes);
+                message['swipe_id'] = branch['branch_id'];
+                message['swipe_info'] = branch['branch'].map((m) =>
+                {
+                    return {
+                        'send_date': m['send_date'],
+                        'gen_started': m['gen_started'],
+                        'gen_finished': m['gen_finished'],
+                        'extra': structuredClone(m['extra']),
+                    };
+                });
+
                 stick.push(message);
             }
 
@@ -8717,8 +8758,8 @@ export async function redisplayChat(chat, index) {
         messageElement.nextAll('div').remove();
         messageElement.remove();
 
-        chatElement.scrollTop(chatElement[0].scrollHeight);
     }
+    chatElement.scrollTop(chatElement[0].scrollHeight);
 
     //Skip to index, then add extra messages.
     for (let i = index + 1; i <= chat.length - 1; i++) {
@@ -8807,6 +8848,8 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
         };
         //assign swipe info array with last message from chat
     }
+
+    console.assert(chat[mesId]['swipe_id'] < chat[mesId]?.swipes?.length, `swipe_id = ${chat[mesId]['swipe_id']}/${chat[mesId]?.swipes?.length}`);
 
     //Save the chat to the chatTree.
     saveChatToTree(chatTree, chat);
@@ -8921,7 +8964,7 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
             const swiped_messages_div  = chatElement.children().filter((index, div) => {
                 const $div = $(div);
                 return Number($div.attr('mesid')) >= mesId;
-            })
+            });
             const swiped_elements_div = swiped_messages_div.children('.mes_block, .mesAvatarWrapper');
 
 
@@ -8960,7 +9003,10 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
             } else {
                 //console.log('showing previously generated swipe candidate, or "..."');
                 //console.log('onclick right swipe calling addOneMessage');
-                addOneMessage(chat[mesId], { type: 'swipe', forceId: mesId });
+
+                //Only scroll when swiping the last message.
+                const scroll = ( mesId == chat.length - 1 );
+                addOneMessage(chat[mesId], { type: 'swipe', forceId: mesId, scroll: scroll });
 
                 if (power_user.message_token_count_enabled) {
                     if (!chat[mesId].extra) {
@@ -9219,6 +9265,7 @@ export async function doNewChat({ deleteCurrentChat = false } = {}) {
     await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
     await clearChat();
     chat.length = 0;
+    chatTree = {};
 
     chat_file_for_del = getCurrentChatDetails()?.sessionName;
 
@@ -9339,6 +9386,7 @@ export async function closeCurrentChat() {
         await waitUntilCondition(() => !isChatSaving, debounce_timeout.extended, 10);
         await clearChat();
         chat.length = 0;
+        chatTree = {};
         resetSelectedGroup();
         setCharacterId(undefined);
         setCharacterName('');

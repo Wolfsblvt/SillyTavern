@@ -24,6 +24,7 @@ import { debounce_timeout } from './constants.js';
 
 import {
     chat,
+    chatTree,
     sendSystemMessage,
     printMessages,
     substituteParams,
@@ -76,6 +77,7 @@ import {
     depth_prompt_role_default,
     shouldAutoContinue,
     unshallowCharacter,
+    setChatTree,
 } from '../script.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect } from './tags.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
@@ -184,8 +186,9 @@ async function loadGroupChat(chatId) {
     });
 
     if (response.ok) {
-        const data = await response.json();
-        return data;
+        const { chatData:currentChat, chatTreeData:currentChatTree } = await response.json();
+
+        return [currentChat, currentChatTree];
     }
 
     return [];
@@ -234,7 +237,7 @@ export async function getGroupChat(groupId, reload = false) {
     await unshallowGroupMembers(groupId);
 
     const chat_id = group.chat_id;
-    const data = await loadGroupChat(chat_id);
+    const [data, treeData] = await loadGroupChat(chat_id);
     const metadata = group.chat_metadata ?? {};
     let freshChat = false;
 
@@ -243,6 +246,7 @@ export async function getGroupChat(groupId, reload = false) {
     if (Array.isArray(data) && data.length) {
         data[0].is_group = true;
         chat.splice(0, chat.length, ...data);
+        setChatTree(treeData);
         await printMessages();
     } else {
         freshChat = !metadata.tainted;
@@ -568,7 +572,7 @@ async function saveGroupChat(groupId, shouldSaveGroup) {
     const response = await fetch('/api/chats/group/save', {
         method: 'POST',
         headers: getRequestHeaders(),
-        body: JSON.stringify({ id: chat_id, chat: [...chat] }),
+        body: JSON.stringify({ id: chat_id, chat: [...chat], chatTree:chatTree }),
     });
 
     if (!response.ok) {
@@ -601,10 +605,34 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
 
             // Load all chats from this group
             for (const chatId of group.chats) {
-                const messages = await loadGroupChat(chatId);
+                const [messages, treeData] = await loadGroupChat(chatId);
 
                 // Only save the chat if there were any changes to the chat content
                 let hadChanges = false;
+
+                function updateMessage(message) {
+                    // Message belonged to the old-named character:
+                    // Update name, avatar thumbnail URL and original avatar link
+                    if (message.force_avatar && message.force_avatar.indexOf(encodeURIComponent(oldAvatar)) !== -1) {
+                        message.name = newName;
+                        message.force_avatar = message.force_avatar.replace(encodeURIComponent(oldAvatar), encodeURIComponent(newAvatar));
+                        message.original_avatar = newAvatar;
+                        hadChanges = true;
+                    }
+                }
+
+                function updateBranch(branch) {
+                    if (branch?.length > 0 ) {
+                        branch.forEach( (m) => {
+                            updateMessage(m);
+                            console.log(m);
+                            updateBranch(m['branch']);
+                        });
+                    }
+                }
+                //Recursively update the chatTree.
+                updateBranch(treeData['branch']);
+
                 // Chat shouldn't be empty
                 if (Array.isArray(messages) && messages.length) {
                     // Iterate over every chat message
@@ -614,21 +642,14 @@ export async function renameGroupMember(oldAvatar, newAvatar, newName) {
                             continue;
                         }
 
-                        // Message belonged to the old-named character:
-                        // Update name, avatar thumbnail URL and original avatar link
-                        if (message.force_avatar && message.force_avatar.indexOf(encodeURIComponent(oldAvatar)) !== -1) {
-                            message.name = newName;
-                            message.force_avatar = message.force_avatar.replace(encodeURIComponent(oldAvatar), encodeURIComponent(newAvatar));
-                            message.original_avatar = newAvatar;
-                            hadChanges = true;
-                        }
+                        updateMessage(message);
                     }
 
                     if (hadChanges) {
                         const saveChatResponse = await fetch('/api/chats/group/save', {
                             method: 'POST',
                             headers: getRequestHeaders(),
-                            body: JSON.stringify({ id: chatId, chat: [...messages] }),
+                            body: JSON.stringify({ id: chatId, chat: [...messages], chatTree:chatTree }),
                         });
 
                         if (!saveChatResponse.ok) {
@@ -1793,6 +1814,7 @@ export async function openGroupById(groupId) {
             setEditedMessageId(undefined);
             updateChatMetadata({}, true);
             chat.length = 0;
+            setChatTree({});
             await getGroupChat(groupId);
             return true;
         }
@@ -1891,6 +1913,7 @@ export async function createNewGroupChat(groupId) {
 
     await clearChat();
     chat.length = 0;
+    setChatTree({});
     if (oldChatName) {
         group.past_metadata[oldChatName] = Object.assign({}, chat_metadata);
     }
@@ -1914,7 +1937,8 @@ export async function getGroupPastChats(groupId) {
 
     try {
         for (const chatId of group.chats) {
-            const messages = await loadGroupChat(chatId);
+            // eslint-disable-next-line no-unused-vars
+            const [messages, chatTree] = await loadGroupChat(chatId);
             let this_chat_file_size = (JSON.stringify(messages).length / 1024).toFixed(2) + 'kb';
             let chat_items = messages.length;
             const lastMessage = messages.length ? messages[messages.length - 1].mes : '[The chat is empty]';
@@ -1943,6 +1967,7 @@ export async function openGroupChat(groupId, chatId) {
 
     await clearChat();
     chat.length = 0;
+    setChatTree({});
     const previousChat = group.chat_id;
     group.past_metadata[previousChat] = Object.assign({}, chat_metadata);
     group.chat_id = chatId;
