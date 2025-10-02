@@ -359,7 +359,7 @@ let default_user_name = 'User';
 export let name1 = default_user_name;
 export let name2 = systemUserName;
 export let chat = [];
-export let swiping = false; //true when a swipe is in progress.
+export let allow_swiping = true; //false when a swipe is in progress, or swiping is blocked.
 let chatSaveTimeout;
 let importFlashTimeout;
 export let isChatSaving = false;
@@ -1414,8 +1414,7 @@ export async function printMessages() {
 
     chatElement.find('.mes').removeClass('last_mes');
     chatElement.find('.mes').last().addClass('last_mes');
-    hideSwipeButtons();
-    showSwipeButtons();
+    refreshSwipeButtons();
     scrollChatToBottom();
     applyStylePins();
 
@@ -1477,8 +1476,7 @@ export async function deleteMessages(mesId, lastMesId) {
     updateViewMessageIds(startFromZero);
     saveChatDebounced();
 
-    hideSwipeButtons();
-    showSwipeButtons();
+    refreshSwipeButtons();
 
     await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
 }
@@ -1503,8 +1501,7 @@ export async function reloadCurrentChat() {
         await eventSource.emit(event_types.CHAT_CHANGED, getCurrentChatId());
     }
 
-    hideSwipeButtons();
-    showSwipeButtons();
+    refreshSwipeButtons();
 }
 
 /**
@@ -2132,8 +2129,7 @@ export function addOneMessage(mes, { type = 'normal', insertAfter = null, scroll
     if (showSwipes) {
         chatElement.find('.mes').last().addClass('last_mes');
         chatElement.find('.mes').eq(-2).removeClass('last_mes');
-        hideSwipeButtons();
-        showSwipeButtons();
+        refreshSwipeButtons();
     }
 
     // Don't scroll if not inserting last
@@ -2846,7 +2842,7 @@ class StreamingProcessor {
             await this.#checkDomElements(messageId, continueOnReasoning);
             this.markUIGenStarted();
         }
-        hideSwipeButtons();
+        await disableSwiping();
         scrollChatToBottom();
         return messageId;
     }
@@ -3480,7 +3476,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         }
 
         // Hide swipes if not in a dry run.
-        hideSwipeButtons();
+        await disableSwiping();
         // If generated any message, set the flag to indicate it can't be recreated again.
         chat_metadata['tainted'] = true;
     }
@@ -4509,7 +4505,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
 
             streamingProcessor.generator = await sendStreamingRequest(type, generate_data);
 
-            hideSwipeButtons();
+            await disableSwiping();
             let getMessage = await streamingProcessor.generate();
             let messageChunk = cleanUpMessage({
                 getMessage: getMessage,
@@ -4811,7 +4807,7 @@ function unblockGeneration(type) {
 
     is_send_press = false;
     activateSendButtons();
-    showSwipeButtons();
+    enableSwiping();
     setGenerationProgress(0);
     flushEphemeralStoppingStrings();
     flushWIInjections();
@@ -5950,7 +5946,7 @@ export function syncSwipeToMes(messageId = null, swipeId = null) {
     }
 
     const targetSwipeId = targetMessage.swipe_id;
-    if (!targetMessage.swipes[targetSwipeId] || !targetMessage.swipe_info[targetSwipeId]) {
+    if (typeof targetMessage.swipes?.[targetSwipeId] !== 'string' || typeof targetMessage.swipe_info?.[targetSwipeId] !== 'object') {
         console.warn(`[syncSwipeToMes] Invalid swipe ID: ${targetSwipeId}`);
         return false;
     }
@@ -6905,8 +6901,7 @@ export async function getSettings() {
 
         swipes = settings.swipes !== undefined ? !!settings.swipes : true;  // enable swipes by default
         $('#swipes-checkbox').prop('checked', swipes); /// swipecode
-        hideSwipeButtons();
-        showSwipeButtons();
+        refreshSwipeButtons();
 
         // Kobold
         loadKoboldSettings(data, settings.kai_settings ?? settings, settings);
@@ -7141,7 +7136,7 @@ function updateMessage(div) {
 
 function openMessageDelete(fromSlashCommand) {
     closeMessageEditor();
-    hideSwipeButtons();
+    disableSwiping();
     if (fromSlashCommand || (!is_send_press) || (selected_group && !is_group_generating)) {
         $('#dialogue_del_mes').css('display', 'block');
         $('#send_form').css('display', 'none');
@@ -7180,6 +7175,7 @@ function messageEditAuto(div) {
 }
 
 async function messageEdit(edit_mes_id) {
+    await hideSwipeButtons();
     let chatScrollPosition = chatElement.scrollTop();
 
     this_edit_mes_id = edit_mes_id;
@@ -7308,9 +7304,11 @@ async function messageEditDone(div) {
         reasoningEditDone.trigger('click');
     }
 
+
     await eventSource.emit(event_types.MESSAGE_UPDATED, this_edit_mes_id);
     this_edit_mes_id = undefined;
     await saveChatConditional();
+    await showSwipeButtons();
 }
 
 /**
@@ -7959,11 +7957,41 @@ export function callPopup(text, type, inputValue = '', { okButton, rows, wide, w
  * Update the swipe counter for mesId.
  * @param {Number} mesId
  */
-export function updateSwipeCounter(mesId) {
+export async function updateSwipeCounter(mesId) {
     const swipeCounterText = formatSwipeCounter((chat[mesId]?.['swipe_id'] + 1), chat[mesId]?.['swipes']?.length);
     const currentMessage = chatElement.children().filter(`[mesid="${mesId}"]`);
     const swipeCounter = currentMessage.find('.swipes-counter');
     swipeCounter.text(swipeCounterText).show();
+}
+
+export async function enableSwiping() {
+    allow_swiping = true;
+
+    if (power_user.enable_chat_tree) {
+        //Show all swipe buttons.
+        $('body').toggleClass('hideAllSwipeButtons', false);
+    } else {
+        showSwipeButtons();
+    }
+}
+export async function disableSwiping() {
+    allow_swiping = false;
+    if (power_user.enable_chat_tree) {
+        //Hide all swipe buttons.
+        $('body').toggleClass('hideAllSwipeButtons', true);
+    } else {
+        hideSwipeButtons();
+    }
+}
+
+/**
+ * Swiping buttons are often toggled to update their position.
+ * This should be replaced with a more efficient function.
+ * This typically does not need to be awaited.
+ */
+export async function refreshSwipeButtons() {
+    hideSwipeButtons();
+    showSwipeButtons();
 }
 
 export function showSwipeButtons(mesId = chat.length - 1) {
@@ -8033,7 +8061,7 @@ export function showSwipeButtons(mesId = chat.length - 1) {
 export function hideSwipeButtons() {
     let element = chatElement;
     //If show_swipe_for_all_messages is enabled, only hide the last message.
-    if (power_user.show_swipes_for_all_messages) {
+    if (power_user.enable_chat_tree) {
         element = chatElement.find(`[mesid="${ chat.length - 1 }"]`);
     }
     element.find('.swipe_right').hide();
@@ -8047,13 +8075,13 @@ export function hideSwipeButtons() {
  * @param {number?} swipeId - The ID of the swipe to delete. If not provided, the current swipe will be deleted.
  * @returns {Promise<number>|undefined} - The ID of the new swipe after deletion.
  */
-export async function deleteSwipe(swipeId = null) {
+export async function deleteSwipe(swipeId = null, mesId = chat[chat.length - 1]) {
     if (swipeId && (isNaN(swipeId) || swipeId < 0)) {
         toastr.warning(t`Invalid swipe ID: ${swipeId + 1}`);
         return;
     }
 
-    const lastMessage = chat[chat.length - 1];
+    const lastMessage = mesId;
     if (!lastMessage || !Array.isArray(lastMessage.swipes) || !lastMessage.swipes.length) {
         toastr.warning(t`No messages to delete swipes from.`);
         return;
@@ -8081,6 +8109,7 @@ export async function deleteSwipe(swipeId = null) {
     const newSwipeId = Math.min(swipeId, lastMessage.swipes.length - 1);
     syncSwipeToMes(null, newSwipeId);
 
+    await updateSwipeCounter(mesId);
     await saveChatConditional();
     await reloadCurrentChat();
 
@@ -8663,11 +8692,12 @@ function formatSwipeCounter(current, total) {
 export async function swipe(_event, swipe_right, { source, repeated, message = chat[chat.length - 1] } = {}) {
 
     //Only allow one concurrent swipe.
-    if (swiping) {
+    if (!allow_swiping) {
         console.info('The swipe has been ignored because another is in progress.');
         return;
     }
-    swiping = true;
+    //Hide swipe buttons.
+    await disableSwiping();
     let generation;
 
     const mesId = Number($(this).closest('.mes').attr('mesid') ?? chat.indexOf(message) ?? chat.length - 1);
@@ -8727,11 +8757,9 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
 
     console.assert(chat[mesId]['swipe_id'] < chat[mesId]?.swipes?.length, `swipe = ${chat[mesId]['swipe_id'] + 1}/${chat[mesId]?.swipes?.length}`);
 
-    if (power_user.show_swipes_for_all_messages) {
+    if (power_user.enable_chat_tree) {
         //Save the chat to the chatTree.
         saveChatToTree(chat);
-        //Hide swipe buttons.
-        $('body').toggleClass('swipeAllMessages', false);
     }
 
     async function endSwipe() {
@@ -8739,13 +8767,11 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
         await generation;
 
         //Allow for another swipe.
-        swiping = false;
+        await enableSwiping();
 
-        if (power_user.show_swipes_for_all_messages) {
-            //Show swipe buttons.
-            $('body').toggleClass('swipeAllMessages', true);
-            showSwipeButtons(mesId);
+        if (power_user.enable_chat_tree) {
             // updateSwipeCounter(mesId)
+            showSwipeButtons(mesId);
         }
     }
 
@@ -8794,7 +8820,7 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
 
             //Allow edits to user messages before generation. Else trigger a swipe generation.
             if (chat[mesId].is_user || mesId === 0) {
-                if (power_user.show_swipes_for_all_messages) {
+                if (power_user.enable_chat_tree) {
                     //Start edit.
                     this_mes_div.find('.mes_edit').trigger('click');
                     let result = await waitForClick(['.mes_edit_done', '.mes_edit_cancel', '.mes_edit_delete'], this_mes_div);
@@ -8802,7 +8828,7 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
                         let mes_edited = this_mes_div.find('.mes_edit_done');
                         await messageEditDone(mes_edited);
 
-                        updateSwipeCounter(mesId);
+                        await updateSwipeCounter(mesId);
 
                         const lastMesId = Number(chatElement.children().last().attr('mesid'));
                         await deleteMessages(mesId + 1, lastMesId);
@@ -8821,8 +8847,6 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
                 delete chat[mesId].gen_started;
                 delete chat[mesId].gen_finished;
                 run_generate = true;
-                //hide swipe arrows while generating
-                this_mes_div.find('.swipe_right').css('display', 'none');
             }
         } else if (parseInt(chat[mesId]['swipe_id']) < chat[mesId]['swipes'].length) { //otherwise, if the id is less than the number of swipes
 
@@ -8838,7 +8862,7 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
         // handles animated transitions when swipe right, specifically height transitions between messages
         if (run_generate || run_swipe) {
 
-            if (power_user.show_swipes_for_all_messages) {
+            if (power_user.enable_chat_tree) {
 
                 //Get chat after the swipe.
                 let stick = getStickFromTree(chatTree, chat, mesId);
@@ -8857,8 +8881,13 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
                 await spliceStickToChat(stick, chat, mesId);
                 await redisplayChat(chat, mesId);
             }
+            //If not the chatTree, load from swipes.
+            else if (!run_generate)
+            {
+                syncSwipeToMes(mesId, chat[mesId]['swipe_id']);
+            }
 
-            updateSwipeCounter(mesId);
+            await updateSwipeCounter(mesId);
 
             //Select messages after mesId.
             const swiped_messages_div  = chatElement.children().filter((index, div) => {
@@ -8975,7 +9004,7 @@ export async function swipe(_event, swipe_right, { source, repeated, message = c
         chat[mesId]['swipe_id'] = 0;
     }
     //Fallback.
-    updateSwipeCounter(mesId);
+    await updateSwipeCounter(mesId);
 
     await endSwipe();
 }
@@ -9671,9 +9700,9 @@ jQuery(async function () {
         swipes = !!$('#swipes-checkbox').prop('checked');
         if (swipes) {
             //console.log('toggle change calling showswipebtns');
-            showSwipeButtons();
+            enableSwiping();
         } else {
-            hideSwipeButtons();
+            disableSwiping();
         }
         saveSettingsDebounced();
     });
@@ -10273,7 +10302,7 @@ jQuery(async function () {
             console.log('this_del_mes is not >= 0, not deleting');
         }
 
-        showSwipeButtons();
+        enableSwiping();
         this_del_mes = -1;
         is_delete_mode = false;
     });
@@ -10496,6 +10525,8 @@ jQuery(async function () {
 
         await eventSource.emit(event_types.MESSAGE_UPDATED, this_edit_mes_id);
         this_edit_mes_id = undefined;
+
+        await showSwipeButtons();
     });
 
     $(document).on('click', '.mes_edit_up', async function () {
@@ -10503,7 +10534,7 @@ jQuery(async function () {
             return;
         }
 
-        hideSwipeButtons();
+        await disableSwiping();
         const targetId = Number(this_edit_mes_id) - 1;
         const target = chatElement.find(`.mes[mesid="${targetId}"]`);
         const root = $(this).closest('.mes');
@@ -10524,7 +10555,7 @@ jQuery(async function () {
         this_edit_mes_id = targetId;
         updateViewMessageIds();
         await saveChatConditional();
-        showSwipeButtons();
+        await enableSwiping();
     });
 
     $(document).on('click', '.mes_edit_down', async function () {
@@ -10532,7 +10563,7 @@ jQuery(async function () {
             return;
         }
 
-        hideSwipeButtons();
+        await disableSwiping();
         const targetId = Number(this_edit_mes_id) + 1;
         const target = chatElement.find(`.mes[mesid="${targetId}"]`);
         const root = $(this).closest('.mes');
@@ -10553,7 +10584,7 @@ jQuery(async function () {
         this_edit_mes_id = targetId;
         updateViewMessageIds();
         await saveChatConditional();
-        showSwipeButtons();
+        await enableSwiping();
     });
 
     $(document).on('click', '.mes_edit_copy', async function () {
@@ -10562,7 +10593,7 @@ jQuery(async function () {
             return;
         }
 
-        hideSwipeButtons();
+        await disableSwiping();
         const oldScroll = chatElement[0].scrollTop;
         const clone = structuredClone(chat[this_edit_mes_id]);
         clone.send_date = Date.now();
@@ -10578,7 +10609,7 @@ jQuery(async function () {
         updateViewMessageIds();
         await saveChatConditional();
         chatElement[0].scrollTop = oldScroll;
-        showSwipeButtons();
+        await enableSwiping();
     });
 
     $(document).on('click', '.mes_edit_delete', async function (event, customData) {
@@ -10621,10 +10652,10 @@ jQuery(async function () {
         updateViewMessageIds(startFromZero);
         saveChatDebounced();
 
-        hideSwipeButtons();
-        showSwipeButtons();
+        refreshSwipeButtons();
 
         await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
+        await showSwipeButtons();
     });
 
     $(document).on('click', '.mes_edit_done', async function () {

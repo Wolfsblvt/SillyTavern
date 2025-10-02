@@ -46,8 +46,6 @@ import {
     talkativeness_default,
     selectRightMenuWithAnimation,
     deleteLastMessage,
-    showSwipeButtons,
-    hideSwipeButtons,
     chat_metadata,
     updateChatMetadata,
     getThumbnailUrl,
@@ -76,6 +74,8 @@ import {
     depth_prompt_role_default,
     shouldAutoContinue,
     unshallowCharacter,
+    disableSwiping,
+    enableSwiping,
 } from '../script.js';
 import { printTagList, createTagMapFromList, applyTagsOnCharacterSelect, tag_map, applyTagsOnGroupSelect } from './tags.js';
 import { FILTER_TYPES, FilterHelper } from './filters.js';
@@ -856,7 +856,7 @@ async function generateGroupWrapper(by_auto_mode, type = null, params = {}) {
         await unshallowGroupMembers(selected_group);
 
         throwIfAborted();
-        hideSwipeButtons();
+        await disableSwiping();
         is_group_generating = true;
         setCharacterName('');
         setCharacterId(undefined);
@@ -968,7 +968,7 @@ async function generateGroupWrapper(by_auto_mode, type = null, params = {}) {
         }
         setCharacterName('');
         activateSendButtons();
-        showSwipeButtons();
+        await enableSwiping();
         await eventSource.emit(event_types.GROUP_WRAPPER_FINISHED, { selected_group, type });
     }
 
