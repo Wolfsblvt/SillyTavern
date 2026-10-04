@@ -118,6 +118,60 @@ test('Custom setup and Profile journey through the installed extension', async (
         await page.evaluate(async () => { await (await import('/script.js')).saveSettings(); });
     });
 
+    await test.step('same-source ordinary Profile preserves Connect and a URL Profile qualifies once', async () => {
+        await openCustom(page);
+        await page.evaluate(async endpoint => {
+            const { oai_settings, refreshCustomConnection } = await import('/scripts/openai.js');
+            delete oai_settings.custom_provider_state;
+            $('#custom_api_url_text').val(`${endpoint}/b/v1`).trigger('input');
+            $('#api_key_custom').val('');
+            refreshCustomConnection();
+            const state = SillyTavern.getContext().extensionSettings.connectionManager;
+            for (const profile of [
+                { id: 'ordinary-same-source', name: 'Ordinary same source', mode: 'cc', api: 'custom', exclude: ['preset'] },
+                { id: 'ordinary-url', name: 'Ordinary URL', mode: 'cc', api: 'custom', 'api-url': `${endpoint}/a/v1` },
+            ]) {
+                state.profiles.push(profile);
+                $('#connection_profiles').append(new Option(profile.name, profile.id));
+            }
+            window.sameSourceStatusSignal = (await import('/script.js')).abortStatusCheck.signal;
+        }, root);
+        let releaseStatus;
+        let statusStarted;
+        let statusResponded;
+        const started = new Promise(resolve => { statusStarted = resolve; });
+        const responded = new Promise(resolve => { statusResponded = resolve; });
+        heldModels = { path: '/b/v1/models', started: statusStarted, responded: statusResponded, release: new Promise(resolve => { releaseStatus = resolve; }) };
+        const beforeRequests = upstreamRequests;
+        try {
+            await page.locator('#api_button_openai').click();
+            await started;
+            await page.selectOption('#connection_profiles', 'ordinary-same-source');
+            await expect.poll(() => page.evaluate(() => SillyTavern.getContext().extensionSettings.connectionManager.selectedProfile)).toBe('ordinary-same-source');
+            expect(await page.evaluate(() => window.sameSourceStatusSignal.aborted)).toBe(false);
+            expect(upstreamRequests - beforeRequests).toBe(1);
+            await expect(page.locator('#api_button_openai')).toHaveClass(/\bdisabled\b/);
+            releaseStatus();
+            await responded;
+            await expect(page.locator('#model_custom_select option[value="obsolete-connect-model"]')).toHaveCount(1);
+            await expect.poll(() => page.evaluate(async () => (await import('/script.js')).online_status)).not.toBe('no_connection');
+            await expect(page.locator('#api_button_openai')).not.toHaveClass(/\bdisabled\b/);
+            await expect(page.locator('#rm_api_block .api_loading').first()).toBeHidden();
+            expect(upstreamRequests - beforeRequests).toBe(1);
+            await page.screenshot({ path: 'artifacts/browser/custom-profile-same-source.png' });
+
+            heldModels = undefined;
+            await page.selectOption('#connection_profiles', 'ordinary-url');
+            await expect.poll(() => page.evaluate(() => SillyTavern.getContext().extensionSettings.connectionManager.selectedProfile)).toBe('ordinary-url');
+            await expect(page.locator('#model_custom_select option[value="discovered-model"]')).toHaveCount(1);
+            await expect(page.locator('#api_button_openai')).not.toHaveClass(/\bdisabled\b/);
+            expect(upstreamRequests - beforeRequests).toBe(2);
+        } finally {
+            releaseStatus();
+            heldModels = undefined;
+        }
+    });
+
     await test.step('masked core picker, discovery, edits, reload and missing helper retain the generic connection', async () => {
         await openCustom(page);
         await page.selectOption('#custom_provider_select', `${owner}:a`);

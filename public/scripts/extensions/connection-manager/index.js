@@ -397,9 +397,10 @@ function makeFancyProfile(profile) {
  * Applies the connection profile.
  * @param {ConnectionProfile} profile Connection profile
  * @param {function(): boolean} isCurrent Whether this selection still owns connection qualification
+ * @param {function(): Promise<void>} qualifyConnection Qualify the committed connection within the selection queue
  * @returns {Promise<void>}
  */
-async function applyConnectionProfile(profile, isCurrent) {
+async function applyConnectionProfile(profile, isCurrent, qualifyConnection) {
     if (!profile) {
         return;
     }
@@ -417,6 +418,11 @@ async function applyConnectionProfile(profile, isCurrent) {
     const resolvedCustomConnection = snapshot ?? legacy;
     const compositional = snapshot === null;
     const transactional = snapshot !== undefined || legacy !== undefined;
+    // Ordinary commands own their reconnects; cancel only a confirmed atomic replacement here.
+    if (transactional && !compositional && $('.api_button.disabled').length) {
+        cancelStatusCheck('Canceled because a Custom connection Profile is being applied');
+        resultCheckStatus();
+    }
     const release = transactional ? beginCustomConnectionTransition() : () => {};
 
     const mode = profile.mode;
@@ -475,7 +481,7 @@ async function applyConnectionProfile(profile, isCurrent) {
         if (previousMainApi !== main_api) await eventSource.emit(event_types.MAIN_API_CHANGED, { apiId: main_api });
         if (previous.chat_completion_source !== oai_settings.chat_completion_source) await eventSource.emit(event_types.CHATCOMPLETION_SOURCE_CHANGED, oai_settings.chat_completion_source);
         // A newer selection may have arrived while commands or final events were awaited.
-        if (isCurrent()) await connectChatCompletion();
+        if (isCurrent()) await qualifyConnection();
     }
 }
 
@@ -779,17 +785,19 @@ export async function init() {
     // Serialize command side effects, while suppressing obsolete selection success.
     let selectionRevision = 0;
     let selectionQueue = Promise.resolve();
-    let applyingProfile = false;
+    let qualifyingProfile = false;
+    async function qualifyConnection() {
+        qualifyingProfile = true;
+        try {
+            await connectChatCompletion();
+        } finally {
+            qualifyingProfile = false;
+        }
+    }
     function selectProfile(profileId) {
         const revision = ++selectionRevision;
-        // Cancel an already-running qualification before waiting for its serialized state operation.
-        const admittedProfile = extension_settings.connectionManager.profiles.find(p => p.id === profileId);
-        const replacesConnection = admittedProfile && !admittedProfile['custom-connection']?.excluded && (
-            Object.hasOwn(admittedProfile, 'custom-connection')
-            || ['api', 'api-url', 'secret-id', 'proxy'].some(command => admittedProfile[command] && !admittedProfile.exclude?.includes(command))
-            || oai_settings.bind_preset_to_connection && admittedProfile.preset && !admittedProfile.exclude?.includes('preset')
-        );
-        if (applyingProfile || replacesConnection && $('.api_button.disabled').length) {
+        // Unblock a superseded Profile operation already awaiting qualification in the queue.
+        if (qualifyingProfile) {
             cancelStatusCheck('Canceled because another connection Profile was selected');
             resultCheckStatus();
         }
@@ -798,12 +806,7 @@ export async function init() {
             const profile = profileId ? extension_settings.connectionManager.profiles.find(p => p.id === profileId) : null;
             if (profileId && !profile) throw new Error('Connection profile no longer exists.');
             if (profile) {
-                applyingProfile = true;
-                try {
-                    await applyConnectionProfile(profile, () => revision === selectionRevision);
-                } finally {
-                    applyingProfile = false;
-                }
+                await applyConnectionProfile(profile, () => revision === selectionRevision, qualifyConnection);
             }
             if (revision !== selectionRevision) return;
             extension_settings.connectionManager.selectedProfile = profileId || null;
